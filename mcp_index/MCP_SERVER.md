@@ -400,6 +400,7 @@ curl -s http://127.0.0.1:8000/generate \
 ```bash
 cd mcp_index
 pip install -r requirements.txt
+cp .env.example .env                # 可选：调整端口、注册表路径或写入令牌
 python mcp_index_server.py          # 监听 127.0.0.1:8100
 # 或
 uvicorn mcp_index_server:app --host 0.0.0.0 --port 8100
@@ -419,7 +420,7 @@ uvicorn mcp_index_server:app --host 0.0.0.0 --port 8100
 | `INDEX_HEALTH_TIMEOUT` | `3.0`                         | 健康检查超时（秒）                               |
 | `LOG_LEVEL`            | `INFO`                        | 日志级别                                         |
 
-`.env` 会从脚本所在目录（`mcp_index/.env`）读取；普通环境变量优先级更高。
+`.env` 会从脚本所在目录（`mcp_index/.env`）读取，模板见 `mcp_index/.env.example`；普通环境变量优先级更高。
 
 ---
 

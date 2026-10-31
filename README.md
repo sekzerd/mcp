@@ -16,6 +16,7 @@
 ```bash
 cd mcp_index
 pip install -r requirements.txt
+cp .env.example .env   # 可选：调整端口、注册表路径或写入令牌
 python mcp_index_server.py
 ```
 
@@ -26,7 +27,7 @@ python mcp_index_server.py
 - 索引列表：`GET /api/mcps`
 - MCP JSON-RPC：`POST /mcp`
 
-注册表保存在 `mcp_index/registry.json`，首次启动会自动写入内置种子。
+注册表保存在 `mcp_index/registry.json`，首次启动会自动写入内置种子。`.env.example` 列出了可选的环境变量（端口、注册表路径、写入令牌等）。
 
 ## Seedream
 
