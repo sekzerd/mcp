@@ -9,9 +9,9 @@
 - **OpenAPI 文档**：`GET /docs` 或 `GET /openapi.json`
 - **代码目录**：`mcp_index/`
 - **注册表文件**：`mcp_index/registry.json`
-- **首次启动种子**：`mcp-seedream`
+- **首次启动种子**：`mcp-seedream`、`mcp-doubao-voice`
 
-本服务是 **MCP 的索引 / 注册中心**。它不生成图片、不执行具体业务工具，只回答：
+本服务是 **MCP 的索引 / 注册中心**。它不生成图片或音频、不执行具体业务工具，只回答：
 
 1. 现在有哪些 MCP 服务？
 2. 每个服务暴露了哪些工具，参数 schema 是什么？
@@ -39,6 +39,7 @@ curl -s http://127.0.0.1:8100/api/mcps/mcp-seedream
 
 # 读取目标 MCP 自己的 markdown 说明
 curl -s http://127.0.0.1:8100/api/mcps/mcp-seedream/readme
+curl -s http://127.0.0.1:8100/api/mcps/mcp-doubao-voice/readme
 ```
 
 ---
@@ -371,6 +372,73 @@ curl -s http://127.0.0.1:8000/generate \
 
 ---
 
+### `mcp-doubao-voice` — 音频生成
+
+- **版本**：`1.0.0`
+- **传输**：`http`；协议：HTTP + JSON（FastAPI）
+- **Base URL**：`http://127.0.0.1:8200`
+- **健康检查**：`GET http://127.0.0.1:8200/health`
+- **OpenAPI**：`GET http://127.0.0.1:8200/openapi.json`
+- **说明文档**：`mcp_doubao_voice/MCP_SERVER.md`（也可 `GET /api/mcps/mcp-doubao-voice/readme`）
+- **标签**：`audio`、`audio-generation`、`tts`、`speech`、`voice`、`doubao`、`volcengine`
+- **上游**：Volcengine Doubao Voice `POST /api/v3/tts/create`
+
+工具 `generate_audio`：
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `text_prompt` | string | 是 | 提示词或待合成文本，1 ~ 3000 字符；用 `@音频N` 引用参考音频 |
+| `model` | string | 否 | 默认 `seed-audio-1.0` |
+| `references` | array | 否 | 最多 3 条音频参考或 1 张图片参考；每项只能设置一个来源；图片不能与音频混用 |
+| `audio_config` | object | 否 | 输出格式、采样率、语速、音量、音调和字幕开关 |
+| `watermark` | object | 否 | `aigc_watermark` 显式水印开关 |
+| `aigc_metadata` | object | 否 | 隐式水印元数据 |
+| `return_base64` | boolean | 否 | 默认 `false`；为 `true` 时在响应中返回 `audio` |
+
+`audio_config` 主要字段：
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `format` | string | `wav`（默认）/ `mp3` / `pcm` / `ogg_opus` |
+| `sample_rate` | integer | 取值取决于格式；省略时使用上游默认 |
+| `speech_rate` | integer | `[-50, 100]`，默认 `0` |
+| `loudness_rate` | integer | `[-50, 100]`，默认 `0` |
+| `pitch_rate` | integer | `[-12, 12]`，默认 `0` |
+| `enable_subtitle` | boolean | 默认 `false`，开启后返回句级/词级时间戳 |
+
+`references` 每项支持以下来源之一：
+
+- `speaker`：音色 ID（豆包语音合成 2.0 或声音复刻音色）
+- `audio_data` / `audio_url`：base64 或 URL 参考音频
+- `image_data` / `image_url`：base64 或 URL 参考图片
+
+调用示例：
+
+```bash
+curl -s http://127.0.0.1:8200/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text_prompt":"你好，欢迎使用豆包语音。","audio_config":{"format":"mp3","sample_rate":44100}}'
+```
+
+使用音色 ID：
+
+```bash
+curl -s http://127.0.0.1:8200/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text_prompt":"欢迎来到直播间。","references":[{"speaker":"<speaker_id>"}],"audio_config":{"format":"mp3"}}'
+```
+
+默认返回 `url`（约 2 小时有效）、`duration`、`original_duration`、`mime_type` 和
+`logid`；`return_base64=true` 时额外返回 `audio`，`enable_subtitle=true` 时返回
+`subtitle`。单次生成最长 120 秒。
+
+> 注意：`mcp-doubao-voice` 也是普通 HTTP 端点，不是 JSON-RPC。Agent 应先通过本索引的
+> `get_mcp` 拿到 `endpoint.url` 与 `inputSchema`，再直接 POST 调用。它所在的
+> `mcp_doubao_voice/` 目录需要单独启动，并配置 `DOUBAO_VOICE_API_KEY`（或旧版
+> `DOUBAO_VOICE_APP_ID` + `DOUBAO_VOICE_ACCESS_KEY`）。
+
+---
+
 ## 错误码
 
 ### REST
@@ -406,7 +474,7 @@ python mcp_index_server.py          # 监听 127.0.0.1:8100
 uvicorn mcp_index_server:app --host 0.0.0.0 --port 8100
 ```
 
-首次启动时如果没有 `registry.json`，服务会自动写入内置种子（包含 `mcp-seedream`）。
+首次启动时如果没有 `registry.json`，服务会自动写入内置种子（包含 `mcp-seedream` 与 `mcp-doubao-voice`）。
 
 环境变量：
 
@@ -430,7 +498,8 @@ uvicorn mcp_index_server:app --host 0.0.0.0 --port 8100
   （或改为外部数据库）。
 - **持久化**：写接口在内存更新后原子替换 `registry.json`（先写 `.tmp` 再 `os.replace`）。
 - **健康检查**：`GET /api/mcps/{id}/health` 只探测条目里的 `health_endpoint`，
-  默认 3 秒超时，不会自动剔除条目。`mcp-seedream` 未启动时会返回 `unreachable`。
+  默认 3 秒超时，不会自动剔除条目。`mcp-seedream` 或 `mcp-doubao-voice` 未启动时
+  都会返回 `unreachable`。
 - **readme 安全**：`readme` 只允许解析到 `INDEX_PROJECT_ROOT` 内部；越界或缺失返回 404。
   `http(s)` 的 readme 会以 302 重定向方式返回。
 - **不代理业务调用**：本服务只做索引，不转发 `/generate` 之类的业务请求，避免额外延迟与

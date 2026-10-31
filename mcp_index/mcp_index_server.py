@@ -306,7 +306,197 @@ def _seed_servers() -> list[dict[str, Any]]:
             ),
             "added_at": now,
             "updated_at": now,
-        }
+        },
+        {
+            "id": "mcp-doubao-voice",
+            "name": "mcp-doubao-voice",
+            "title": "Doubao Voice Audio Generation",
+            "description": (
+                "Generates speech, sound effects and multi-speaker audio through "
+                "Volcengine Doubao Voice (seed-audio-1.0). Supports pure text, up "
+                "to three audio references (speaker/base64/URL) or one image "
+                "reference, and returns an audio URL or base64 payload with "
+                "optional timestamps."
+            ),
+            "version": "1.0.0",
+            "transport": "http",
+            "protocol": "HTTP + JSON (FastAPI)",
+            "base_url": "http://127.0.0.1:8200",
+            "mcp_endpoint": None,
+            "health_endpoint": "http://127.0.0.1:8200/health",
+            "docs_url": "http://127.0.0.1:8200/docs",
+            "openapi_url": "http://127.0.0.1:8200/openapi.json",
+            "readme": "mcp_doubao_voice/MCP_SERVER.md",
+            "repo": "mcp_doubao_voice/mcp_doubao_voice_server.py",
+            "tags": [
+                "audio",
+                "audio-generation",
+                "tts",
+                "speech",
+                "voice",
+                "doubao",
+                "volcengine",
+            ],
+            "tools": [
+                {
+                    "name": "generate_audio",
+                    "title": "Generate Audio",
+                    "description": (
+                        "Generate audio from a text prompt with Doubao Voice. "
+                        "Returns a temporary URL by default; set "
+                        "return_base64=true to embed the audio bytes."
+                    ),
+                    "inputSchema": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            "text_prompt": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 3000,
+                                "description": (
+                                    "Prompt or text to synthesize. Use @音频N to "
+                                    "reference the N-th audio in references."
+                                ),
+                            },
+                            "model": {
+                                "type": "string",
+                                "default": "seed-audio-1.0",
+                                "description": "Optional model override.",
+                            },
+                            "references": {
+                                "type": "array",
+                                "maxItems": 3,
+                                "description": (
+                                    "At most 3 audio references or 1 image "
+                                    "reference. Audio and image references cannot "
+                                    "be mixed. Each item must set exactly one source."
+                                ),
+                                "items": {
+                                    "type": "object",
+                                    "additionalProperties": False,
+                                    "properties": {
+                                        "speaker": {
+                                            "type": "string",
+                                            "description": "Voice ID.",
+                                        },
+                                        "audio_data": {
+                                            "type": "string",
+                                            "description": (
+                                                "Base64 reference audio (<=10MB)."
+                                            ),
+                                        },
+                                        "audio_url": {
+                                            "type": "string",
+                                            "description": "Reference audio URL.",
+                                        },
+                                        "image_data": {
+                                            "type": "string",
+                                            "description": (
+                                                "Base64 reference image (<=10MB)."
+                                            ),
+                                        },
+                                        "image_url": {
+                                            "type": "string",
+                                            "description": "Reference image URL.",
+                                        },
+                                    },
+                                },
+                            },
+                            "audio_config": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "format": {
+                                        "type": "string",
+                                        "enum": [
+                                            "wav",
+                                            "mp3",
+                                            "pcm",
+                                            "ogg_opus",
+                                        ],
+                                        "default": "wav",
+                                    },
+                                    "sample_rate": {
+                                        "type": "integer",
+                                        "description": (
+                                            "Output sample rate in Hz; allowed "
+                                            "values depend on format."
+                                        ),
+                                    },
+                                    "speech_rate": {
+                                        "type": "integer",
+                                        "minimum": -50,
+                                        "maximum": 100,
+                                        "default": 0,
+                                    },
+                                    "loudness_rate": {
+                                        "type": "integer",
+                                        "minimum": -50,
+                                        "maximum": 100,
+                                        "default": 0,
+                                    },
+                                    "pitch_rate": {
+                                        "type": "integer",
+                                        "minimum": -12,
+                                        "maximum": 12,
+                                        "default": 0,
+                                    },
+                                    "enable_subtitle": {
+                                        "type": "boolean",
+                                        "default": False,
+                                    },
+                                },
+                            },
+                            "watermark": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "aigc_watermark": {
+                                        "type": "boolean",
+                                        "default": False,
+                                    }
+                                },
+                            },
+                            "aigc_metadata": {
+                                "type": "object",
+                                "additionalProperties": False,
+                                "properties": {
+                                    "enable": {
+                                        "type": "boolean",
+                                        "default": False,
+                                    },
+                                    "content_producer": {"type": "string"},
+                                    "produce_id": {"type": "string"},
+                                    "content_propagator": {"type": "string"},
+                                    "propagate_id": {"type": "string"},
+                                },
+                            },
+                            "return_base64": {
+                                "type": "boolean",
+                                "default": False,
+                                "description": (
+                                    "Include the base64 audio in the JSON response."
+                                ),
+                            },
+                        },
+                        "required": ["text_prompt"],
+                    },
+                    "endpoint": {
+                        "method": "POST",
+                        "url": "http://127.0.0.1:8200/generate",
+                        "contentType": "application/json",
+                    },
+                }
+            ],
+            "notes": (
+                "Requires DOUBAO_VOICE_API_KEY (or legacy APP_ID + ACCESS_KEY). "
+                "Audio URLs expire after about 2 hours; use return_base64=true "
+                "for persistence. Output is capped at 120 seconds."
+            ),
+            "added_at": now,
+            "updated_at": now,
+        },
     ]
 
 
