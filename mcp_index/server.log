@@ -1,0 +1,19 @@
+INFO:     Started server process [17964]
+INFO:     Waiting for application startup.
+2026-10-31 17:13:18,627 INFO mcp-index: loaded 1 MCP server(s) from G:\mcp\mcp_index\registry.json
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8100 (Press CTRL+C to quit)
+INFO:     127.0.0.1:50549 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50550 - "GET /api/mcps?q=seedream HTTP/1.1" 200 OK
+INFO:     127.0.0.1:50551 - "POST /mcp HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60973 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:60973 - "GET /favicon.ico HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:60973 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56243 - "GET /docs HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56243 - "GET /openapi.json HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55119 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:55335 - "GET / HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56860 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:56860 - "GET /health HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51398 - "GET /api/tools HTTP/1.1" 200 OK
+INFO:     127.0.0.1:51398 - "GET /api/tools HTTP/1.1" 200 OK

@@ -1,0 +1,79 @@
+{
+  "version": 1,
+  "updated_at": "2026-10-31T09:04:34.048505+00:00",
+  "servers": [
+    {
+      "id": "mcp-seedream",
+      "name": "mcp-seedream",
+      "title": "Seedream Image Generation",
+      "description": "Turns a text prompt into an image through Volcengine Ark (Doubao Seedream). Returns image URLs by default and can inline base64 bytes when return_base64=true.",
+      "version": "1.0.0",
+      "transport": "http",
+      "protocol": "HTTP + JSON (FastAPI)",
+      "base_url": "http://127.0.0.1:8000",
+      "mcp_endpoint": null,
+      "health_endpoint": "http://127.0.0.1:8000/health",
+      "docs_url": "http://127.0.0.1:8000/docs",
+      "openapi_url": "http://127.0.0.1:8000/openapi.json",
+      "readme": "mcp_seedream/MCP_SERVER.md",
+      "repo": "mcp_seedream/mcp_seedream_server.py",
+      "tags": [
+        "image",
+        "image-generation",
+        "seedream",
+        "volcengine",
+        "doubao"
+      ],
+      "tools": [
+        {
+          "name": "generate_image",
+          "title": "Generate Image",
+          "description": "Generate an image from a text prompt with Doubao Seedream. Image URLs are returned by default; set return_base64=true to embed image bytes in the JSON response.",
+          "inputSchema": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "prompt": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000,
+                "description": "Text description of the image to generate."
+              },
+              "size": {
+                "type": "string",
+                "default": "2K",
+                "description": "Output size: \"1K\", \"2K\", \"4K\" or \"WIDTHxHEIGHT\"."
+              },
+              "watermark": {
+                "type": "boolean",
+                "default": false,
+                "description": "Let the provider stamp a watermark."
+              },
+              "return_base64": {
+                "type": "boolean",
+                "default": false,
+                "description": "Download the image server-side and include base64 data."
+              },
+              "model": {
+                "type": "string",
+                "description": "Optional model override."
+              }
+            },
+            "required": [
+              "prompt"
+            ]
+          },
+          "outputSchema": null,
+          "endpoint": {
+            "method": "POST",
+            "url": "http://127.0.0.1:8000/generate",
+            "contentType": "application/json"
+          }
+        }
+      ],
+      "notes": "Requires ARK_API_KEY on the Seedream server. Image URLs expire; use return_base64=true (or download promptly) for persistence.",
+      "added_at": "2026-10-31T09:04:33.949012Z",
+      "updated_at": "2026-10-31T09:04:33.949012Z"
+    }
+  ]
+}
