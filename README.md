@@ -10,16 +10,35 @@
 | `mcp_seedream/` | 基于火山方舟 Doubao Seedream 的文生图 HTTP 服务 |
 | `mcp_doubao_voice/` | 基于火山方舟豆包语音的音频生成 HTTP 服务 |
 
+根目录的 `run.py` 可一键启动 MCP Index。
+
 ## MCP Index
 
 索引服务默认监听 `http://127.0.0.1:8100`，当前已收录 `mcp-seedream`、`mcp-doubao-voice`。
 
+推荐在项目根目录一键启动：
+
+```bash
+python run.py
+```
+
+首次使用先安装索引服务依赖：
+
+```bash
+python -m pip install -r mcp_index/requirements.txt
+```
+
+也可以进入 `mcp_index/` 手动启动：
+
 ```bash
 cd mcp_index
-pip install -r requirements.txt
 cp .env.example .env   # 可选：调整端口、注册表路径或写入令牌
 python mcp_index_server.py
 ```
+
+`run.py` 支持 `--host`、`--port`、`--reload`、`--log-level`，并会读取
+`mcp_index/.env` 中的 `HOST`、`PORT`、`LOG_LEVEL`（命令行参数优先）。默认地址为
+`http://127.0.0.1:8100`；端口被占用时会直接给出提示。
 
 常用入口：
 
