@@ -12,6 +12,8 @@ venv/
 
 # Runtime output
 *.log
+logs/
+service.json
 mcp_index/registry.json.tmp
 
 # OS / editor

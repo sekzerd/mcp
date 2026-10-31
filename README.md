@@ -40,6 +40,24 @@ python mcp_index_server.py
 `mcp_index/.env` 中的 `HOST`、`PORT`、`LOG_LEVEL`（命令行参数优先）。默认地址为
 `http://127.0.0.1:8100`；端口被占用时会直接给出提示。
 
+### 后台运行（Windows 服务）
+
+需要后台常驻时，可用 `service.py` 把 `run.py` 注册为 Windows 服务（依赖 `pywin32`）。
+`enable` / `disable` 需要管理员权限；当前终端不是管理员时会弹出 UAC，并在新的管理员
+命令行窗口中自动继续执行，窗口会保留以便查看结果：
+
+```bash
+python -m pip install pywin32
+
+python service.py enable    # 安装并启动服务，开机自动运行
+python service.py status    # 查看服务状态
+python service.py disable   # 停止并卸载服务
+```
+
+服务以 LocalSystem 身份运行，内部以子进程方式守护 `run.py`：异常退出会自动重启，
+输出写入 `logs/service.log`（按大小轮转）。排查问题时可执行
+`python service.py console`，在前台运行同样的守护逻辑。
+
 常用入口：
 
 - Agent 说明：`GET /mcp.md`
