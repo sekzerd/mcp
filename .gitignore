@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Local secrets (keep the examples)
+.env
+.env.*
+!.env.example
+
+# Runtime output
+*.log
+mcp_index/registry.json.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
