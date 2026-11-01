@@ -56,7 +56,7 @@ def _load_dotenv(path: Path | None = None) -> None:
 _load_dotenv()
 
 DEFAULT_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-DEFAULT_MODEL = "doubao-seedream-5-0-pro-260628"
+DEFAULT_MODEL = "doubao-seedream-5-0-flash-260915"
 MAX_IMAGE_BYTES = 32 * 1024 * 1024
 
 ARK_API_KEY = os.environ.get("ARK_API_KEY", "").strip()
