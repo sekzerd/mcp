@@ -4,11 +4,11 @@
 
 ## 目录结构
 
-| 目录 | 说明 |
-| --- | --- |
-| `mcp_index/` | MCP 索引 / 注册中心，支持 REST 与 MCP JSON-RPC，并向 agent 提供 markdown 说明 |
-| `mcp_seedream/` | 基于火山方舟 Doubao Seedream 的文生图 HTTP 服务 |
-| `mcp_doubao_voice/` | 基于火山方舟豆包语音的音频生成 HTTP 服务 |
+| 目录                | 说明                                                                          |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `mcp_index/`        | MCP 索引 / 注册中心，支持 REST 与 MCP JSON-RPC，并向 agent 提供 markdown 说明 |
+| `mcp_seedream/`     | 基于火山方舟 Doubao Seedream 的文生图 HTTP 服务                               |
+| `mcp_doubao_voice/` | 基于火山方舟豆包语音的音频生成 HTTP 服务                                      |
 
 根目录的 `run.py` 可一键启动 MCP Index。
 
@@ -50,6 +50,7 @@ python mcp_index_server.py
 python -m pip install pywin32
 
 python service.py enable    # 安装并启动服务，开机自动运行
+python service.py restart   # 只重启服务，不重新安装
 python service.py status    # 查看服务状态
 python service.py disable   # 停止并卸载服务
 ```
@@ -57,6 +58,12 @@ python service.py disable   # 停止并卸载服务
 服务以 LocalSystem 身份运行，内部以子进程方式守护 `run.py`：异常退出会自动重启，
 输出写入 `logs/service.log`（按大小轮转）。排查问题时可执行
 `python service.py console`，在前台运行同样的守护逻辑。
+
+停服务时 `service.py` 只通过 SCM 发停止指令，不会去枚举服务注册表（枚举会在权限受限的
+键上失败并报 `(5, 'RegOpenKeyEx', '拒绝访问')`）。如果服务在 `SERVICE_STOP_PENDING`
+卡住，`enable` / `disable` / `restart` 会超时后强制结束服务宿主进程；在服务内部还有
+一个 40 秒看门狗负责保底。修改了 `service.py` 本身后需要重新 `enable`，因为守护逻辑
+是随服务宿主一起加载的。
 
 常用入口：
 

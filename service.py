@@ -4,6 +4,7 @@ Usage:
 
     python service.py enable    # install + start, auto-start on boot
     python service.py disable   # stop + uninstall
+    python service.py restart   # stop + start without reinstalling
     python service.py status    # show the current state
     python service.py console   # run the supervisor in the foreground (debug)
 
@@ -34,12 +35,18 @@ import threading
 import time
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TYPE_CHECKING, Any, cast
+
+if TYPE_CHECKING:
+    from _win32typing import PySC_HANDLE
 
 if sys.platform != "win32":
     raise SystemExit("service.py only supports Windows.")
 
 try:
     import servicemanager
+    import win32api
+    import win32con
     import win32event
     import win32service
     import win32serviceutil
@@ -61,11 +68,17 @@ SERVICE_DESCRIPTION = "Runs run.py (MCP Index) in the background as a Windows se
 
 RESTART_DELAY_SECONDS = 5
 STOP_TIMEOUT_SECONDS = 5
+STOP_WATCHDOG_SECONDS = 40
+SERVICE_STOP_WAIT_SECONDS = 25.0
+SERVICE_START_WAIT_SECONDS = 20.0
 LOG_MAX_BYTES = 5 * 1024 * 1024
 LOG_BACKUP_COUNT = 3
 
+ERROR_ACCESS_DENIED = 5
 ERROR_SERVICE_NOT_ACTIVE = 1062
 ERROR_SERVICE_DOES_NOT_EXIST = 1060
+ERROR_SERVICE_CANNOT_ACCEPT_CTRL = 1061
+ERROR_SERVICE_ALREADY_RUNNING = 1056
 ERROR_SERVICE_MARKED_FOR_DELETION = 1072
 
 SERVICE_STATE_NAMES = {
@@ -256,16 +269,38 @@ def _deliver_ctrl_break(proc: subprocess.Popen[str], shared_console: bool) -> bo
         kernel32.FreeConsole()
 
 
+def _signal_child(
+    proc: subprocess.Popen[str], shared_console: bool, logger: logging.Logger
+) -> bool:
+    """Deliver CTRL_BREAK without letting console APIs stall the service host."""
+    outcome: dict[str, bool] = {"delivered": False}
+
+    def _deliver() -> None:
+        outcome["delivered"] = _deliver_ctrl_break(proc, shared_console)
+
+    worker = threading.Thread(target=_deliver, name="run.py-stop", daemon=True)
+    worker.start()
+    worker.join(STOP_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        logger.warning(
+            "console signal to run.py did not return within %ss",
+            STOP_TIMEOUT_SECONDS,
+        )
+        return False
+    return outcome["delivered"]
+
+
 def _stop_child(
     proc: subprocess.Popen[str],
     logger: logging.Logger,
     shared_console: bool = True,
 ) -> None:
     if proc.poll() is not None:
+        logger.info("run.py already exited (code=%s)", proc.returncode)
         return
 
     logger.info("stopping run.py (pid=%s)", proc.pid)
-    if _deliver_ctrl_break(proc, shared_console):
+    if _signal_child(proc, shared_console, logger):
         try:
             proc.wait(timeout=STOP_TIMEOUT_SECONDS)
             logger.info("run.py stopped")
@@ -299,6 +334,7 @@ class MCPIndexService(win32serviceutil.ServiceFramework):
     def __init__(self, args: list[str]) -> None:
         super().__init__(args)
         self._stop_event = win32event.CreateEvent(None, 0, 0, None)
+        self._stopped_event = win32event.CreateEvent(None, 1, 0, None)
         self._logger = _service_logger()
 
     def SvcStop(self) -> None:
@@ -308,6 +344,30 @@ class MCPIndexService(win32serviceutil.ServiceFramework):
         )
         self._logger.info("stop requested")
         win32event.SetEvent(self._stop_event)
+        threading.Thread(
+            target=self._stop_watchdog, name="stop-watchdog", daemon=True
+        ).start()
+
+    def _stop_watchdog(self) -> None:
+        """Leave SERVICE_STOP_PENDING even if the supervisor thread is wedged.
+
+        The SCM rejects ``stop``/``start``/``delete`` for the whole wait hint
+        ("The service is starting or stopping. Please try again later."), so
+        this keeps a stuck stop from wedging the service forever. run.py is
+        attached to a kill-on-close job object, so exiting here also takes the
+        child down with it.
+        """
+        if (
+            win32event.WaitForSingleObject(
+                self._stopped_event, int(STOP_WATCHDOG_SECONDS * 1000)
+            )
+            == win32event.WAIT_OBJECT_0
+        ):
+            return
+        self._logger.error(
+            "service did not stop within %ss; forcing exit", STOP_WATCHDOG_SECONDS
+        )
+        os._exit(1)
 
     def SvcDoRun(self) -> None:
         servicemanager.LogInfoMsg(f"{SERVICE_NAME} starting")
@@ -319,6 +379,7 @@ class MCPIndexService(win32serviceutil.ServiceFramework):
         try:
             self._supervise()
         finally:
+            win32event.SetEvent(self._stopped_event)
             self._logger.info("service stopped")
             servicemanager.LogInfoMsg(f"{SERVICE_NAME} stopped")
 
@@ -364,8 +425,26 @@ class MCPIndexService(win32serviceutil.ServiceFramework):
 # ---------------------------------------------------------------------------
 
 
+def _has_admin_rights() -> bool:
+    """Probe for the privilege the commands actually need.
+
+    ``IsUserAnAdmin`` is deprecated and can disagree with the SCM about a
+    filtered token, so ask the SCM for the access the commands require.
+    """
+    try:
+        hscm = win32service.OpenSCManager(
+            None, None, win32service.SC_MANAGER_CREATE_SERVICE
+        )
+    except win32service.error as exc:
+        if exc.winerror == ERROR_ACCESS_DENIED:
+            return False
+        raise
+    win32service.CloseServiceHandle(hscm)
+    return True
+
+
 def _require_admin(elevated: bool) -> None:
-    if ctypes.windll.shell32.IsUserAnAdmin():
+    if _has_admin_rights():
         return
 
     if elevated:
@@ -426,13 +505,97 @@ def _pause_before_close() -> None:
         pass
 
 
+def _open_service(access: int) -> PySC_HANDLE:
+    """Open this service straight through the SCM.
+
+    Deliberately avoids ``win32serviceutil.StopServiceWithDeps``: it walks
+    ``HKLM\\SYSTEM\\CurrentControlSet\\Services`` and opens every subkey, so a
+    single key with a restrictive ACL aborts the whole command with
+    ``(5, 'RegOpenKeyEx', 'Access is denied')``.
+    """
+    hscm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_CONNECT)
+    try:
+        return win32service.OpenService(hscm, SERVICE_NAME, access)
+    finally:
+        win32service.CloseServiceHandle(hscm)
+
+
 def _service_state() -> int | None:
     try:
-        return win32serviceutil.QueryServiceStatus(SERVICE_NAME)[1]
+        hs = _open_service(win32service.SERVICE_QUERY_STATUS)
     except win32service.error as exc:
         if exc.winerror == ERROR_SERVICE_DOES_NOT_EXIST:
             return None
         raise
+    try:
+        return win32service.QueryServiceStatus(hs)[1]
+    finally:
+        win32service.CloseServiceHandle(hs)
+
+
+def _service_pid() -> int | None:
+    try:
+        hs = _open_service(win32service.SERVICE_QUERY_STATUS)
+    except win32service.error:
+        return None
+    try:
+        return _service_status_info(hs).get("ProcessId") or None
+    finally:
+        win32service.CloseServiceHandle(hs)
+
+
+def _service_status_info(hs: PySC_HANDLE) -> dict[str, Any]:
+    """QueryServiceStatusEx returns a dict at runtime, despite the stub type."""
+    return cast(dict[str, Any], win32service.QueryServiceStatusEx(hs))
+
+
+def _wait_for_state(hs: PySC_HANDLE, wanted: int, timeout: float) -> bool:
+    deadline = time.monotonic() + timeout
+    while True:
+        if win32service.QueryServiceStatus(hs)[1] == wanted:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _wait_for_running(hs: PySC_HANDLE, timeout: float) -> bool:
+    """Wait for SERVICE_RUNNING and bail out if the start already failed."""
+    deadline = time.monotonic() + timeout
+    time.sleep(0.5)  # give the SCM a moment to enter SERVICE_START_PENDING
+    while True:
+        state = win32service.QueryServiceStatus(hs)[1]
+        if state == win32service.SERVICE_RUNNING:
+            return True
+        if state == win32service.SERVICE_STOPPED:
+            return False
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.5)
+
+
+def _terminate_service_host(hs: PySC_HANDLE) -> bool:
+    """Force the service host down; the job object takes run.py with it."""
+    pid = _service_status_info(hs).get("ProcessId") or 0
+    if not pid:
+        print(
+            "The service host has no process id; cannot force it down.", file=sys.stderr
+        )
+        return False
+    try:
+        handle = win32api.OpenProcess(win32con.PROCESS_TERMINATE, 0, pid)
+    except win32api.error as exc:
+        print(f"Could not open service process {pid}: {exc}", file=sys.stderr)
+        return False
+    try:
+        win32api.TerminateProcess(handle, 1)
+        print(f"Terminated service host (pid {pid}).")
+        return True
+    except win32api.error as exc:
+        print(f"Could not terminate service process {pid}: {exc}", file=sys.stderr)
+        return False
+    finally:
+        win32api.CloseHandle(handle)
 
 
 def _wait_until_removed(timeout: float = 10.0) -> bool:
@@ -464,15 +627,98 @@ def _print_log_tail(lines: int = 15) -> None:
             print(f"  {line}", file=sys.stderr)
 
 
-def _stop_service() -> None:
-    state = _service_state()
-    if state is None or state == win32service.SERVICE_STOPPED:
-        return
+def _start_service(timeout: float = SERVICE_START_WAIT_SECONDS) -> bool:
     try:
-        win32serviceutil.StopServiceWithDeps(SERVICE_NAME, waitSecs=30)
+        hs = _open_service(
+            win32service.SERVICE_START | win32service.SERVICE_QUERY_STATUS
+        )
     except win32service.error as exc:
-        if exc.winerror != ERROR_SERVICE_NOT_ACTIVE:
-            raise
+        print(f"Could not open service {SERVICE_NAME}: {exc}", file=sys.stderr)
+        return False
+    try:
+        try:
+            win32service.StartService(hs, None)
+        except win32service.error as exc:
+            if exc.winerror != ERROR_SERVICE_ALREADY_RUNNING:
+                print(f"Service failed to start: {exc}", file=sys.stderr)
+                return False
+        if _wait_for_running(hs, timeout):
+            return True
+        print(
+            f"Service {SERVICE_NAME} did not reach the running state"
+            f" within {timeout:.0f}s.",
+            file=sys.stderr,
+        )
+        return False
+    finally:
+        win32service.CloseServiceHandle(hs)
+
+
+def _stop_service(timeout: float = SERVICE_STOP_WAIT_SECONDS) -> bool:
+    """Stop the service, force-terminating the host if it will not exit."""
+    try:
+        hs = _open_service(
+            win32service.SERVICE_STOP | win32service.SERVICE_QUERY_STATUS
+        )
+    except win32service.error as exc:
+        if exc.winerror in (ERROR_SERVICE_DOES_NOT_EXIST, ERROR_SERVICE_NOT_ACTIVE):
+            return True
+        print(f"Could not open service {SERVICE_NAME}: {exc}", file=sys.stderr)
+        return False
+
+    try:
+        state = win32service.QueryServiceStatus(hs)[1]
+        if state == win32service.SERVICE_STOPPED:
+            return True
+
+        if state == win32service.SERVICE_STOP_PENDING:
+            print(
+                f"Service {SERVICE_NAME} is already in SERVICE_STOP_PENDING;"
+                f" waiting up to {timeout:.0f}s before forcing it down."
+            )
+        else:
+            try:
+                win32service.ControlService(hs, win32service.SERVICE_CONTROL_STOP)
+            except win32service.error as exc:
+                if exc.winerror not in (
+                    ERROR_SERVICE_NOT_ACTIVE,
+                    ERROR_SERVICE_CANNOT_ACCEPT_CTRL,
+                ):
+                    raise
+
+        if _wait_for_state(hs, win32service.SERVICE_STOPPED, timeout):
+            return True
+
+        print(
+            f"Service {SERVICE_NAME} did not stop within {timeout:.0f}s"
+            " (it is most likely wedged in SERVICE_STOP_PENDING);"
+            " forcing it down.",
+            file=sys.stderr,
+        )
+        if not _terminate_service_host(hs):
+            return False
+        return _wait_for_state(hs, win32service.SERVICE_STOPPED, 10.0)
+    finally:
+        win32service.CloseServiceHandle(hs)
+
+
+def _remove_service() -> None:
+    hscm = win32service.OpenSCManager(None, None, win32service.SC_MANAGER_ALL_ACCESS)
+    try:
+        hs = win32service.OpenService(hscm, SERVICE_NAME, win32con.DELETE)
+        try:
+            win32service.DeleteService(hs)
+        finally:
+            win32service.CloseServiceHandle(hs)
+    finally:
+        win32service.CloseServiceHandle(hscm)
+
+    try:
+        import win32evtlogutil
+
+        win32evtlogutil.RemoveSourceFromRegistry(SERVICE_NAME)
+    except (ImportError, win32service.error):
+        pass
 
 
 def _configure_recovery() -> None:
@@ -514,9 +760,15 @@ def cmd_enable(args: argparse.Namespace) -> int:
 
     if _service_state() is not None:
         print(f"Service {SERVICE_NAME} already exists; reinstalling...")
-        _stop_service()
+        if not _stop_service():
+            print(
+                "Could not stop the existing service; the reinstall was aborted.",
+                file=sys.stderr,
+            )
+            return 1
+        print("Removing service...")
         try:
-            win32serviceutil.RemoveService(SERVICE_NAME)
+            _remove_service()
         except win32service.error as exc:
             if exc.winerror == ERROR_SERVICE_MARKED_FOR_DELETION:
                 print(
@@ -544,13 +796,7 @@ def cmd_enable(args: argparse.Namespace) -> int:
     _configure_recovery()
 
     print("Starting service...")
-    try:
-        win32serviceutil.StartService(SERVICE_NAME)
-        win32serviceutil.WaitForServiceStatus(
-            SERVICE_NAME, win32service.SERVICE_RUNNING, 20
-        )
-    except win32service.error as exc:
-        print(f"Service failed to start: {exc}", file=sys.stderr)
+    if not _start_service():
         _print_log_tail()
         return 1
 
@@ -571,11 +817,16 @@ def cmd_disable(args: argparse.Namespace) -> int:
         return 0
 
     print(f"Stopping service {SERVICE_NAME}...")
-    _stop_service()
+    if not _stop_service():
+        print(
+            f"Could not stop service {SERVICE_NAME}; it is still installed.",
+            file=sys.stderr,
+        )
+        return 1
 
     print("Removing service...")
     try:
-        win32serviceutil.RemoveService(SERVICE_NAME)
+        _remove_service()
     except win32service.error as exc:
         if exc.winerror == ERROR_SERVICE_MARKED_FOR_DELETION:
             print(
@@ -591,6 +842,32 @@ def cmd_disable(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_restart(args: argparse.Namespace) -> int:
+    _require_admin(args.elevated)
+
+    if _service_state() is None:
+        print(
+            f"Service {SERVICE_NAME} is not installed."
+            " Run 'python service.py enable' first.",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Stopping service {SERVICE_NAME}...")
+    if not _stop_service():
+        print(f"Could not stop service {SERVICE_NAME}.", file=sys.stderr)
+        return 1
+
+    print("Starting service...")
+    if not _start_service():
+        _print_log_tail()
+        return 1
+
+    print(f"Restarted: '{SERVICE_DISPLAY_NAME}'")
+    print(f"Log: {LOG_FILE}")
+    return 0
+
+
 def cmd_status(_args: argparse.Namespace) -> int:
     state = _service_state()
     if state is None:
@@ -598,6 +875,9 @@ def cmd_status(_args: argparse.Namespace) -> int:
         return 1
 
     print(f"Service {SERVICE_NAME}: {SERVICE_STATE_NAMES.get(state, state)}")
+    pid = _service_pid()
+    if pid:
+        print(f"Process: {pid}")
     print(f"Script:  {RUN_PY}")
     print(f"Log:     {LOG_FILE}")
     return 0
@@ -645,6 +925,11 @@ def build_parser() -> argparse.ArgumentParser:
     disable = subparsers.add_parser("disable", help="stop and remove the service")
     disable.set_defaults(func=cmd_disable)
 
+    restart = subparsers.add_parser(
+        "restart", help="stop and start the service without reinstalling"
+    )
+    restart.set_defaults(func=cmd_restart)
+
     status = subparsers.add_parser("status", help="show the service state")
     status.set_defaults(func=cmd_status)
 
@@ -665,7 +950,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return args.func(args)
     except win32service.error as exc:
-        print(f"Windows service error: {exc}", file=sys.stderr)
+        if exc.winerror == ERROR_ACCESS_DENIED:
+            print(
+                "Access denied: run this command from an elevated terminal"
+                " (or accept the UAC prompt it raises).",
+                file=sys.stderr,
+            )
+        else:
+            print(f"Windows service error: {exc}", file=sys.stderr)
         return 1
     finally:
         if args.elevated:
