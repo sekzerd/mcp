@@ -68,7 +68,7 @@ SERVICE_DESCRIPTION = "Runs run.py (MCP Index) in the background as a Windows se
 
 RESTART_DELAY_SECONDS = 5
 STOP_TIMEOUT_SECONDS = 5
-STOP_WATCHDOG_SECONDS = 40
+STOP_WATCHDOG_SECONDS = 20
 SERVICE_STOP_WAIT_SECONDS = 25.0
 SERVICE_START_WAIT_SECONDS = 20.0
 LOG_MAX_BYTES = 5 * 1024 * 1024
@@ -315,6 +315,7 @@ def _stop_child(
     proc.terminate()
     try:
         proc.wait(timeout=5)
+        logger.info("run.py terminated")
     except subprocess.TimeoutExpired:
         logger.warning("run.py ignored terminate; killing it")
         proc.kill()
@@ -333,14 +334,20 @@ class MCPIndexService(win32serviceutil.ServiceFramework):
 
     def __init__(self, args: list[str]) -> None:
         super().__init__(args)
-        self._stop_event = win32event.CreateEvent(None, 0, 0, None)
+        # Manual-reset on purpose. The supervisor polls this event with a
+        # blocking ``_wait()`` and checks ``_stop_requested()`` again between
+        # iterations. An auto-reset event is consumed by the first wait, so the
+        # follow-up check would report "not stopped" and the loop would keep
+        # running forever -- which is exactly how the service used to wedge in
+        # SERVICE_STOP_PENDING when stopped from the SCM.
+        self._stop_event = win32event.CreateEvent(None, 1, 0, None)
         self._stopped_event = win32event.CreateEvent(None, 1, 0, None)
         self._logger = _service_logger()
 
     def SvcStop(self) -> None:
         self.ReportServiceStatus(
             win32service.SERVICE_STOP_PENDING,
-            waitHint=(STOP_TIMEOUT_SECONDS + RESTART_DELAY_SECONDS + 10) * 1000,
+            waitHint=(STOP_WATCHDOG_SECONDS + 5) * 1000,
         )
         self._logger.info("stop requested")
         win32event.SetEvent(self._stop_event)
@@ -367,7 +374,16 @@ class MCPIndexService(win32serviceutil.ServiceFramework):
         self._logger.error(
             "service did not stop within %ss; forcing exit", STOP_WATCHDOG_SECONDS
         )
-        os._exit(1)
+        # Report the stopped state before leaving: exiting without it makes the
+        # SCM treat this as a crash and run the recovery action, which restarts
+        # the very service the user just stopped.
+        try:
+            self.ReportServiceStatus(
+                win32service.SERVICE_STOPPED, win32ExitCode=0, svcExitCode=0
+            )
+        except win32service.error:
+            pass
+        os._exit(0)
 
     def SvcDoRun(self) -> None:
         servicemanager.LogInfoMsg(f"{SERVICE_NAME} starting")
